@@ -1,0 +1,7 @@
+linearity_required_measurements: 10
+short_term_stability_measurement_interval_seconds: 1.0
+short_term_stability_required_measurements: 300
+short_term_stability_required_integration_time_seconds: 0.1
+long_term_stability_measurement_interval_seconds: 30.0
+long_term_stability_required_measurements: 240
+long_term_stability_required_integration_time_seconds: 1.0
