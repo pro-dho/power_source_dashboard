@@ -1,1 +1,4 @@
-debug_serialization.ipynb__pycache__/
+debug_serialization.ipynb
+__pycache__/
+.streamlit/
+

@@ -6,8 +6,6 @@ A professional Streamlit dashboard for quality control and analysis of light sou
 
 - **Analysis Dashboard**: Detailed per-dataset analysis with Linearity, Stability (Short/Long term) graphs.
 - **Metrics History**: Aggregated historical view of key metrics (Stability, Linearity R²) across all datasets.
-- **Green Theme**: Professional color scheme optimized for lab/energy contexts.
-- **Interactive Visualizations**: Built with Plotly for dynamic data exploration.
 
 ## Setup
 
