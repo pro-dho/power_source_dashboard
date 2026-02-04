@@ -217,11 +217,11 @@ def create_stability_graph(
             x='acquisition_datetime',
             y='power_mw',
             color=color_col,
-            markers=True,
+            # markers=True, -- Removed for cleaner look
             title=title,
             color_discrete_sequence=['#4CAF50', '#2E7D32', '#81C784'] # Palette
         )
-        fig.update_traces(marker=dict(size=6), line=dict(width=2))
+        fig.update_traces(line=dict(width=2))
         
         # Update legend title
         fig.update_layout(legend_title_text=color_col.replace('_', ' ').replace('seconds', '(s)').title())
@@ -232,15 +232,11 @@ def create_stability_graph(
         fig.add_trace(go.Scatter(
             x=df_sorted['acquisition_datetime'],
             y=df_sorted['power_mw'],
-            mode='lines+markers',
-            marker=dict(size=6, color=base_color),
+            mode='lines', # Removed markers
+            # marker=dict(size=6, color=base_color),
             line=dict(color=base_color, width=2),
             name='Power (mW)',
-            fill='tozeroy',
-            # fillcolor using base_color but with opacity
-            # Simple hack: we leave it default or try to manipulate hex if critical
-            # For now, let's just not set specific fillcolor or use a generic light gray/green
-            # fillcolor='rgba(76, 175, 80, 0.1)'
+            # fill='tozeroy', -- Removed fill for cleaner look
         ))
 
     # Add mean line (global mean)
@@ -538,87 +534,106 @@ def main():
     # --- Column 1: Linearity Section ---
     with col_charts_1:
         st.markdown(f"<h3 style='color: {theme_color}; margin-bottom: 20px;'>Power Linearity</h3>", unsafe_allow_html=True)
-        # Linearity data - measurements with varying power set points
-        linearity_data = filtered_pm[filtered_pm['power_set_point'] < 1.0] if not filtered_pm.empty else pd.DataFrame()
-        if linearity_data.empty and not filtered_pm.empty:
-            linearity_data = filtered_pm
         
-        fig_linearity = create_linearity_graph(
-            linearity_data,
-            f"Linearity - {selected_light_source}",
-            base_color=theme_color
-        )
-        st.plotly_chart(fig_linearity, use_container_width=True)
+        lin_tabs = st.tabs(["Linearity Check"])
+        with lin_tabs[0]:
+            # Linearity data - use classified type if available
+            if 'measurement_type' in filtered_pm.columns:
+                linearity_data = filtered_pm[filtered_pm['measurement_type'] == 'Linearity']
+            else:
+                # Fallback if classification failed
+                linearity_data = filtered_pm[filtered_pm['power_set_point'] < 1.0] if not filtered_pm.empty else pd.DataFrame()
             
-        # Show date range info
-        if not key_meas.empty:
-            mask = (
-                (key_meas['light_source'] == selected_light_source) &
-                (key_meas['power_meter'] == selected_power_meter) &
-                (key_meas['measuring_location'] == selected_location)
+            fig_linearity = create_linearity_graph(
+                linearity_data,
+                f"Linearity - {selected_light_source}",
+                base_color=theme_color
             )
-            if mask.any():
-                row = key_meas[mask].iloc[0]
-                start = row.get('power_linearity_start_datetime', '')
-                end = row.get('power_linearity_end_datetime', '')
-                if start and str(start) != '0001-01-01T00:00:00':
-                    st.caption(f"Linearity measurement period: {start} to {end}")
+            st.plotly_chart(fig_linearity, use_container_width=True)
+                
+            # Show date range info
+            if not key_meas.empty:
+                mask = (
+                    (key_meas['light_source'] == selected_light_source) &
+                    (key_meas['power_meter'] == selected_power_meter) &
+                    (key_meas['measuring_location'] == selected_location)
+                )
+                if mask.any():
+                    row = key_meas[mask].iloc[0]
+                    start = row.get('power_linearity_start_datetime', '')
+                    end = row.get('power_linearity_end_datetime', '')
+                    if start and str(start) != '0001-01-01T00:00:00':
+                        st.caption(f"Linearity measurement period: {start} to {end}")
 
-    # --- Column 2: Stability Section ---
     # --- Column 2: Stability Section ---
     with col_charts_2:
         st.markdown(f"<h3 style='color: {theme_color}; margin-bottom: 20px;'>Power Stability</h3>", unsafe_allow_html=True)
         
-        # Stability Overview - all data at max power set point (usually 1.0)
-        stability_data = filtered_pm[filtered_pm['power_set_point'] >= 0.95].copy() if not filtered_pm.empty else pd.DataFrame()
+        # Stability Overview - use classified type if available
+        if 'measurement_type' in filtered_pm.columns:
+            stability_data = filtered_pm[filtered_pm['measurement_type'].str.contains('Stability', na=False)].copy()
+        else:
+            # Fallback
+            stability_data = filtered_pm[filtered_pm['power_set_point'] >= 0.95].copy() if not filtered_pm.empty else pd.DataFrame()
         
         if not stability_data.empty:
-            # 1. Label the data segments visually
-            def get_stability_label(row):
-                t = row.get('integration_time_seconds', 0)
-                if t <= 0.02: # Allow small margin around 0.01
-                        return f"Short-term ({t}s)"
-                elif t >= 0.05: # Assumed long term
-                        return f"Long-term ({t}s)"
-                return f"Other ({t}s)"
+            # 1. Use existing classification
+            type_column = 'measurement_type' if 'measurement_type' in stability_data.columns else 'Measurement Type'
 
-            if 'integration_time_seconds' in stability_data.columns:
-                stability_data['Measurement Type'] = stability_data.apply(get_stability_label, axis=1)
-
-            # 2. Consolidated Graph using Color Groups (No Tabs)
-            if 'Measurement Type' in stability_data.columns:
-                fig_stability = create_stability_graph(
-                    stability_data,
-                    f"Stability - All Segments",
-                    "Time",
-                    color_col='Measurement Type',
-                    base_color=theme_color
-                )
-                fig_stability.update_layout(height=400)
-                st.plotly_chart(fig_stability, use_container_width=True)
+            # 2. Iterate and display separate graphs for each group using Tabs
+            if type_column in stability_data.columns:
+                groups = sorted(stability_data[type_column].unique())
                 
-                # Simplified Metrics (Aggregate)
-                mean_p = stability_data['power_mw'].mean()
-                std_p = stability_data['power_mw'].std()
-                std_pct = (std_p / mean_p) * 100 if mean_p != 0 else 0
+                # Filter out Linearity just in case
+                groups = [g for g in groups if 'Stability' in g]
                 
-                sc1, sc2, sc3 = st.columns(3)
-                sc1.metric("Mean Power", f"{mean_p:.2f} mW")
-                sc2.metric("Std Dev", f"{std_p:.4f} mW")
-                sc3.metric("Variation", f"±{std_pct:.3f}%")
-            
+                if groups:
+                    stab_tabs = st.tabs(groups)
+                    
+                    for tab, group_name in zip(stab_tabs, groups):
+                        with tab:
+                            group_data = stability_data[stability_data[type_column] == group_name]
+                            
+                            # Graph for this specific group
+                            fig_stability = create_stability_graph(
+                                group_data,
+                                f"{group_name}", # Title is just the type
+                                "Time",
+                                color_col=None,
+                                base_color=theme_color
+                            )
+                            # Reduce height slightly to fit well in column
+                            fig_stability.update_layout(height=400)
+                            st.plotly_chart(fig_stability, use_container_width=True)
+                            
+                            # Stats for this group
+                            mean_p = group_data['power_mw'].mean()
+                            std_p = group_data['power_mw'].std()
+                            std_pct = (std_p / mean_p) * 100 if mean_p != 0 else 0
+                            start_t = group_data['acquisition_datetime'].min()
+                            end_t = group_data['acquisition_datetime'].max()
+                            
+                            sc1, sc2, sc3 = st.columns(3)
+                            sc1.metric("Mean Power", f"{mean_p:.2f} mW")
+                            sc2.metric("Std Dev", f"{std_p:.4f} mW")
+                            sc3.metric("Variation", f"±{std_pct:.3f}%")
+                            st.caption(f"Time Range: {start_t.strftime('%H:%M:%S')} - {end_t.strftime('%H:%M:%S')}")
             else:
                 # Fallback single graph
-                fig_stability = create_stability_graph(
-                    stability_data,
-                    f"Stability Overview",
-                    "Time",
-                    base_color=theme_color
-                )
-                st.plotly_chart(fig_stability, use_container_width=True)
+                stab_tabs = st.tabs(["Overview"])
+                with stab_tabs[0]:
+                    fig_stability = create_stability_graph(
+                        stability_data,
+                        f"Stability Overview",
+                        "Time",
+                        base_color=theme_color
+                    )
+                    st.plotly_chart(fig_stability, use_container_width=True)
 
         else:
-            st.info("No high-power stability measurements found.")
+            stab_tabs = st.tabs(["Status"])
+            with stab_tabs[0]:
+                st.info("No stability measurements found.")
     
     # Raw data view
     st.divider()

@@ -13,7 +13,7 @@ def parse_multi_section_csv(filepath: str) -> Dict[str, Any]:
     - 'light_sources': DataFrame
     - 'power_meters': DataFrame
     - 'acquisition_datetime': str
-    - 'power_measurements': DataFrame
+    - 'power_measurements': DataFrame (with 'measurement_group' column)
     """
     with open(filepath, 'r', encoding='utf-8-sig') as f:
         lines = f.readlines()
@@ -21,6 +21,12 @@ def parse_multi_section_csv(filepath: str) -> Dict[str, Any]:
     sections = {}
     current_section = None
     current_lines = []
+    
+    # Logic for group separation in power_measurements
+    # We will pre-process lines for power_measurements to include a group ID
+    
+    measurement_group_id = 0
+    in_power_measurements = False
     
     for line in lines:
         stripped = line.strip()
@@ -40,7 +46,31 @@ def parse_multi_section_csv(filepath: str) -> Dict[str, Any]:
                 
             current_section = section_name
             current_lines = []
-        elif stripped:  # Non-empty line
+            
+            # Reset logic for power measurements
+            if section_name == 'power_measurements':
+                in_power_measurements = True
+                measurement_group_id = 0
+            else:
+                in_power_measurements = False
+                
+        elif in_power_measurements:
+             # Logic for power measurements section
+             if not stripped: # Empty line
+                 if current_lines: # Only increment if we have started collecting data
+                     measurement_group_id += 1
+             else:
+                 # Data line
+                 # Append the measurement_group to the header or data
+                 if 'acquisition_datetime' in stripped and 'measurement_group' not in stripped: # Header
+                      current_lines.append(stripped + ",measurement_group\n")
+                 elif 'acquisition_datetime' not in stripped: # Data row
+                      current_lines.append(stripped + f",{measurement_group_id}\n")
+                 else:
+                      current_lines.append(stripped + "\n") # Already modified header
+
+        
+        elif stripped:  # Non-empty line for other sections
             current_lines.append(line)
     
     # Save last section
@@ -71,6 +101,57 @@ def parse_multi_section_csv(filepath: str) -> Dict[str, Any]:
     return result
 
 
+    return result
+
+
+def classify_measurements(df: pd.DataFrame) -> pd.DataFrame:
+    """Classify measurements as 'Linearity', 'Stability Short Term', or 'Stability Long Term'.
+    
+    Logic:
+    1. Group by 'measurement_group' (created during parsing from empty lines).
+    2. For each group:
+       - If 'power_set_point' varies (>1 unique value) -> 'Linearity'.
+       - If 'power_set_point' is constant (1 unique value):
+         - Calculate mean 'integration_time_seconds'.
+         - If mean time <= 0.02 -> 'Stability Short Term'.
+         - If mean time > 0.02 -> 'Stability Long Term'.
+    
+    Args:
+        df: DataFrame with 'power_set_point', 'acquisition_datetime', 'measurement_group', 'integration_time_seconds'.
+        
+    Returns:
+        DataFrame with new 'measurement_type' column.
+        If 'measurement_group' is missing, returns df unchanged.
+    """
+    if df.empty or 'measurement_group' not in df.columns:
+        return df
+    
+    # helper to classify a single group
+    def classify_group(group_df):
+        # 1. Check set point variation
+        unique_set_points = group_df['power_set_point'].nunique()
+        
+        if unique_set_points > 1:
+            return 'Linearity'
+        else:
+            # 2. Check integration time for stability
+            avg_integration_time = group_df['integration_time_seconds'].mean()
+            # robust check for short term vs long term
+            if avg_integration_time <= 0.02:
+                return 'Stability Short Term'
+            else:
+                return 'Stability Long Term'
+
+    # Apply classification per group
+    # We create a mapping: group_id -> type
+    group_types = df.groupby('measurement_group').apply(classify_group)
+    
+    # Map back to original dataframe
+    df['measurement_type'] = df['measurement_group'].map(group_types)
+    
+    return df
+
+
 def load_key_measurements(filepath: str) -> pd.DataFrame:
     """Load key measurements from YAML file."""
     with open(filepath, 'r') as f:
@@ -90,7 +171,7 @@ def load_dataset(dataset_path: str) -> Dict[str, Any]:
     Returns a dict with:
     - 'light_sources': DataFrame
     - 'power_meters': DataFrame
-    - 'power_measurements': DataFrame
+    - 'power_measurements': DataFrame (Classified)
     - 'key_measurements': DataFrame
     - 'input_parameters': dict
     """
@@ -105,10 +186,15 @@ def load_dataset(dataset_path: str) -> Dict[str, Any]:
     key_measurements = load_key_measurements(key_path)
     input_parameters = load_input_parameters(params_path)
     
+    # Process Power Measurements
+    pm_df = csv_data.get('power_measurements', pd.DataFrame())
+    if not pm_df.empty:
+        pm_df = classify_measurements(pm_df)
+    
     return {
         'light_sources': csv_data.get('light_sources', pd.DataFrame()),
         'power_meters': csv_data.get('power_meters', pd.DataFrame()),
-        'power_measurements': csv_data.get('power_measurements', pd.DataFrame()),
+        'power_measurements': pm_df,
         'key_measurements': key_measurements,
         'input_parameters': input_parameters,
     }
